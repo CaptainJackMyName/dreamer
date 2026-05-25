@@ -1,0 +1,50 @@
+[project]
+name = "dreamer"
+version = "0.1.0"
+description = "A high-performance, extensible inference engine for video generation models."
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+keywords = ["video generation", "diffusion", "inference engine", "wan", "open-sora"]
+authors = [
+    {name = "Dreamer Team"},
+]
+
+dependencies = [
+    "torch>=2.4.0",
+    "torchvision>=0.19.0",
+    "transformers>=4.48.0",
+    "diffusers>=0.38.0",
+    "accelerate>=1.0.0",
+    "safetensors>=0.4.0",
+    "numpy>=1.26.0",
+    "opencv-python>=4.10.0",
+    "imageio>=2.35.0",
+    "imageio-ffmpeg>=0.5.0",
+    "pillow>=10.0.0",
+    "einops>=0.8.0",
+    "tqdm>=4.66.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "python-multipart>=0.0.12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "black>=24.0.0",
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+]
+
+[project.scripts]
+dreamer = "dreamer.cli:main"
+
+[build-system]
+requires = ["setuptools>=75.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dreamer*"]
