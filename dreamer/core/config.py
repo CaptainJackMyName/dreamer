@@ -30,7 +30,6 @@ class GenerationConfig:
     seed: Optional[int] = None
     guidance_scale: float = 5.0
     fps: int = 16
-    response_format: str = "url"
     image: Optional[Any] = None
     # Model-specific overrides
     extra_args: Dict[str, Any] = field(default_factory=dict)
