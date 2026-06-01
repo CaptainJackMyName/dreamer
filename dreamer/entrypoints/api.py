@@ -8,7 +8,6 @@ Endpoints:
   GET  /health
 """
 
-import base64
 import io
 import logging
 import os
@@ -17,24 +16,37 @@ import time
 import uuid
 
 from contextlib import asynccontextmanager
-from datetime import datetime
-from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
 
+from ..beans import (
+    Text2VideoRequest,
+    Image2VideoRequest,
+    GeneralResponse,
+    GenerationData,
+    GenerationResponse,
+    ModelsData,
+    ModelsResponse,
+)
 from ..core.config import GenerationConfig, ModelConfig
 from ..core.engine import VideoGenEngineCore
-from ..utils.video import save_video
+from ..constants import (
+    VideoGenerationStatus,
+    HttpResponseCodes,
+)
+from ..utils import (
+    save_video,
+    TimeUtil,
+)
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Global engine store (simple in-memory; can be replaced with Redis later)
 # ---------------------------------------------------------------------------
-_engines: Dict[str, VideoGenEngineCore] = {}
-_tasks: Dict[str, Dict[str, Any]] = {}
+_engines: dict[str, VideoGenEngineCore] = {}
+_tasks: dict[str, dict[str, any]] = {}
 
 
 def _get_engine(model_id: str) -> VideoGenEngineCore:
@@ -43,47 +55,6 @@ def _get_engine(model_id: str) -> VideoGenEngineCore:
         _engines[model_id] = VideoGenEngineCore(cfg)
         _engines[model_id].load()
     return _engines[model_id]
-
-
-# ---------------------------------------------------------------------------
-# Pydantic schemas
-# ---------------------------------------------------------------------------
-class Text2VideoRequest(BaseModel):
-    model: str = "Wan2.2-TI2V-5B-Diffusers"
-    prompt: str
-    negative_prompt: str = ""
-    num_frames: int = 81
-    width: int = 1280
-    height: int = 704
-    num_inference_steps: int = 50
-    seed: Optional[int] = None
-    guidance_scale: float = 5.0
-    fps: int = 16
-
-
-class Image2VideoRequest(BaseModel):
-    model: str = "wan-2.2-t2v-a14b"
-    image: str  # base64 encoded image
-    prompt: str = ""
-    num_frames: int = 81
-    width: int = 1280
-    height: int = 720
-    num_inference_steps: int = 50
-    seed: Optional[int] = None
-    guidance_scale: float = 5.0
-    fps: int = 16
-
-
-class GenerationResponse(BaseModel):
-    task_id: str
-    status: str  # pending | running | completed | failed
-    video_url: Optional[str] = None
-    video_base64: Optional[str] = None
-    message: str = ""
-
-
-class ModelsResponse(BaseModel):
-    models: List[str]
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +80,7 @@ app = FastAPI(
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _save_to_temp(frames: Any, fps: int = 16) -> str:
+def _save_to_temp(frames: any, fps: int = 16) -> str:
     tmp_dir = tempfile.gettempdir()
     fname = f"dreamer_{uuid.uuid4().hex}.mp4"
     path = os.path.join(tmp_dir, fname)
@@ -134,47 +105,59 @@ def _request_to_config(req: Text2VideoRequest) -> GenerationConfig:
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
-@app.get("/health")
+@app.get("/health", response_model=GeneralResponse, response_model_exclude_none=True)
 async def health():
-    cur_time = datetime.now()
-    timestamp = cur_time.strftime("%Y-%m-%d %H:%M:%S")
-    return {"status": "ok", "timestamp": timestamp}
+    timestamp = TimeUtil.get_current_time_in_YMDHMS()
+
+    return GeneralResponse(
+        code=HttpResponseCodes.SUCCESS,
+        message="success",
+        timestamp=timestamp,
+    )
 
 
 @app.get("/v1/models", response_model=ModelsResponse)
 async def list_available_models():
     """Return only models currently loaded in GPU memory."""
-    return ModelsResponse(models=list(_engines.keys()))
+    return ModelsResponse(
+        code=HttpResponseCodes.SUCCESS,
+        message="success",
+        data=ModelsData(models=list(_engines.keys())),
+    )
 
 
-@app.post("/v1/generation/text2video", response_model=GenerationResponse)
+@app.post("/v1/generation/text2video", response_model=GenerationResponse, response_model_exclude_none=True)
 async def text2video(req: Text2VideoRequest):
     task_id = uuid.uuid4().hex
-    _tasks[task_id] = {"status": "running", "start_time": time.time()}
+    timestamp = TimeUtil.get_current_time_in_YMDHMS()
+    _tasks[task_id] = {"status": VideoGenerationStatus.GENERATING.value, "start_time": timestamp}
 
     try:
         engine = _get_engine(req.model)
         config = _request_to_config(req)
         frames = engine.generate(config)
         path = _save_to_temp(frames, fps=req.fps)
-        _tasks[task_id].update({"status": "completed", "path": path})
+        _tasks[task_id].update({"status": VideoGenerationStatus.COMPLETED.value, "path": path})
         
-        return GenerationResponse(
+        gd = GenerationData(
             task_id=task_id,
-            status="completed",
+            status=VideoGenerationStatus.COMPLETED.value,
             video_url=f"/v1/download/video/{task_id}",
             message="Generation succeeded.",
         )
+
+        return GenerationResponse(code=HttpResponseCodes.SUCCESS, message="success", data=gd)
     except Exception as exc:
         logger.exception("text2video generation failed")
-        _tasks[task_id]["status"] = "failed"
+        _tasks[task_id]["status"] = VideoGenerationStatus.FAILED.value
         raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.post("/v1/generation/image2video", response_model=GenerationResponse)
 async def image2video(req: Image2VideoRequest):
     task_id = uuid.uuid4().hex
-    _tasks[task_id] = {"status": "running", "start_time": time.time()}
+    timestamp = TimeUtil.get_current_time_in_YMDHMS()
+    _tasks[task_id] = {"status": VideoGenerationStatus.GENERATING.value, "start_time": timestamp}
 
     try:
         import base64
@@ -199,15 +182,21 @@ async def image2video(req: Image2VideoRequest):
         path = _save_to_temp(frames, fps=req.fps)
         _tasks[task_id].update({"status": "completed", "path": path})
         
-        return GenerationResponse(
+        gd = GenerationData(
             task_id=task_id,
-            status="completed",
+            status=VideoGenerationStatus.COMPLETED.value,
             video_url=f"/v1/download/video/{task_id}",
             message="Generation succeeded.",
         )
+
+        return GenerationResponse(
+            code=HttpResponseCodes.SUCCESS,
+            message="success",
+            data=gd,
+        )
     except Exception as exc:
         logger.exception("image2video generation failed")
-        _tasks[task_id]["status"] = "failed"
+        _tasks[task_id]["status"] = VideoGenerationStatus.FAILED.value
         raise HTTPException(status_code=500, detail=str(exc))
 
 
@@ -223,24 +212,46 @@ async def query_task(task_id: str):
     }
 
 
-@app.get("/v1/download/video/{task_id}")
+@app.get("/v1/download/video/{task_id}", response_model_exclude_none=True)
 async def download_video(task_id: str):
     task = _tasks.get(task_id)
-    if not task or task.get("status") != "completed":
-        return JSONResponse(
-            status_code=400,
-            content={"success": False, "error": task.get("error_msg", "视频生成失败")}
+
+    if task is None:
+        return GeneralResponse(
+            code=HttpResponseCodes.FAILURE,
+            message=f"Task {task_id} not found",
         )
-    path = task.get("path")
-    if not path or not os.path.exists(path):
-        return JSONResponse(
-            status_code=400,
-            content={"success": False, "error": task.get("error_msg", "视频路径不存在")}
+    
+    task_status = task.get("status")
+    
+    if task_status == VideoGenerationStatus.QUEUING.value:
+        return GeneralResponse(
+            code=HttpResponseCodes.SUCCESS,
+            message=f"Task {task_id} is queuing",
         )
+    elif task_status == VideoGenerationStatus.GENERATING.value:
+        return GeneralResponse(
+            code=HttpResponseCodes.SUCCESS,
+            message=f"Task {task_id} is in progress",
+        )
+    elif task_status == VideoGenerationStatus.FAILED.value:
+        return GeneralResponse(
+            code=HttpResponseCodes.FAILURE,
+            message=f"Task {task_id} failed",
+        )
+    
+    video_path = task.get("path")
+    
+    if (not video_path) or (not os.path.exists(video_path)):
+        return GeneralResponse(
+            code=HttpResponseCodes.FAILURE,
+            message=task.get("error_msg", "视频路径不存在"), 
+        )
+    
     file_name = f"dreamer_{task_id}.mp4"
 
     return FileResponse(
-        path, 
+        video_path,
         media_type="video/mp4",
         filename=file_name,
         headers={"Content-Disposition": f"attachment; filename={file_name}"}

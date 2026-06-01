@@ -82,8 +82,6 @@ def _resolve_model_arg(model_arg: str):
 
 
 def cmd_serve(args):
-    import os
-
     import uvicorn
 
     from dreamer.core.config import ModelConfig
